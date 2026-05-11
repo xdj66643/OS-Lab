@@ -1,78 +1,49 @@
 #![no_std]
 #![no_main]
+#[macro_use]
 
-use core::panic::PanicInfo;
-use core::arch::asm;
-use core::fmt::{self, Write};
+mod console;
+mod lang_items;
+mod sbi;
 
-// === 1. 异常处理 ===
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
-}
+use core::arch::global_asm;
 
-// === 2. 系统调用底层 (Syscall) ===
-const SYSCALL_WRITE: usize = 64;
-const SYSCALL_EXIT: usize = 93;
+global_asm!(include_str!("entry.asm"));
 
-fn syscall(id: usize, args: [usize; 3]) -> isize {
-    let mut ret: isize;
-    unsafe {
-        asm!("ecall",
-             in("x10") args[0],
-             in("x11") args[1],
-             in("x12") args[2],
-             in("x17") id,
-             lateout("x10") ret
-        );
+fn clear_bss() {
+    // 修复1：加上 unsafe
+    unsafe extern "C" {
+        fn sbss();
+        fn ebss();
     }
-    ret
+    (sbss as usize..ebss as usize).for_each(|a| unsafe { (a as *mut u8).write_volatile(0) });
 }
 
-// === 3. 退出机制封装 ===
-// 实现应用程序退出 [cite: 6, 7]
-pub fn sys_exit(xstate: i32) -> isize {
-    syscall(SYSCALL_EXIT, [xstate as usize, 0, 0])
-}
-
-// === 4. 输出支持封装 ===
-// 封装对 SYSCALL_WRITE 的系统调用 [cite: 8]
-pub fn sys_write(fd: usize, buffer: &[u8]) -> isize {
-    syscall(SYSCALL_WRITE, [fd, buffer.as_ptr() as usize, buffer.len()])
-}
-
-// 实现基于 Write Trait 的数据结构 [cite: 8, 9]
-struct Stdout;
-impl Write for Stdout {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        sys_write(1, s.as_bytes());
-        Ok(())
+#[unsafe(no_mangle)] 
+pub fn rust_main() -> ! {
+    // 修复2：加上 unsafe
+    unsafe extern "C" {
+        fn stext();
+        fn etext();
+        fn srodata();
+        fn erodata();
+        fn sdata();
+        fn edata();
+        fn sbss();
+        fn ebss();
+        fn boot_stack();
+        fn boot_stack_top();
     }
-}
-
-pub fn print(args: fmt::Arguments) {
-    Stdout.write_fmt(args).unwrap();
-}
-
-// 实现 Rust 语言格式化宏 [cite: 10, 11, 12, 13]
-#[macro_export]
-macro_rules! print {
-    ($fmt: literal $(, $($arg: tt)+)?) => {
-        $crate::print(format_args!($fmt $(, $($arg)+)?));
-    }
-}
-
-#[macro_export]
-macro_rules! println {
-    ($fmt: literal $(, $($arg: tt)+)?) => {
-        print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?));
-    }
-}
-
-// === 5. 程序的真正入口 ===
-// 满足老师的新要求，并调用退出机制 [cite: 7, 13]
-#[unsafe(no_mangle)]
-extern "C" fn _start() {
-    println!("Hello, world! 学号: 23301081");
-    sys_exit(9);
+    clear_bss();
+    println!("Hello, world!");
+    println!(".text [{:#x}, {:#x})", stext as usize, etext as usize);
+    println!(".rodata [{:#x}, {:#x})", srodata as usize, erodata as usize);
+    println!(".data [{:#x}, {:#x})", sdata as usize, edata as usize);
+    println!(
+        "boot_stack [{:#x}, {:#x})",
+        boot_stack as usize, boot_stack_top as usize
+    );
+    println!(".bss [{:#x}, {:#x})", sbss as usize, ebss as usize);
+    println!("23301081");
+    panic!("Shutdown machine!");
 }
